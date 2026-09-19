@@ -1,0 +1,21 @@
+services:
+
+  venue-and-menu-service:
+    build:
+      context: ../venue-and-menu-service
+
+  user-service:
+    build:
+      context: ../user-service
+
+  review-service:
+    build:
+      context: ../review-service
+
+  order-service:
+    build:
+      context: ../order-service
+
+  payment-service:
+    build:
+      context: ../payment-service
