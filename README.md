@@ -34,7 +34,7 @@ parent-directory/
 
 Go to the service directories and set up `.env` files using `.env.example` as bases.
 
-For the application to work correctly, hots ports must be set up in `.env` files. Different services must have different host ports.
+For the application to work correctly, host ports must be set up in `.env` files. Different services must have different host ports.
 For example:
 ```
 venue-and-menu-service: 8081
