@@ -32,7 +32,14 @@ parent-directory/
 
 ## 2. Configure environment variables
 
-Go to the service directories and set up `.env` files using `.env.example` as bases.
+Go to the service directories and set up `.env` files using `.env.example` as bases. You can copy the contents of the
+`.env.example` files by running this command in the parent directory:
+
+```
+for file in */.env.example; do
+    cp "$file" "${file%.example}";
+done
+```
 
 For the application to work correctly, host ports must be set up in `.env` files. Different services must have different host ports.
 For example:
