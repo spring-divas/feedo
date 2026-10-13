@@ -7,3 +7,4 @@ resources:
   - ../../review-service/k8s
   - ../../order-service/k8s
   - ../../payment-service/k8s
+  - ./kafka.yaml
