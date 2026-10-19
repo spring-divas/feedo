@@ -8,3 +8,4 @@ resources:
   - ../../order-service/k8s
   - ../../payment-service/k8s
   - ./kafka.yaml
+  - ./monitoring
