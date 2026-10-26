@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 5s
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+                - alertmanager:9093
+
+    rule_files:
+      - /etc/prometheus/alert-rules.yml
+
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: [ "localhost:9090" ]
+
+      - job_name: venue-service
+        metrics_path: /api/actuator/prometheus
+        static_configs:
+          - targets:
+              - venue-service.default.svc.cluster.local:8080
+
+      - job_name: order-service
+        metrics_path: /api/actuator/prometheus
+        static_configs:
+          - targets:
+              - order-service.default.svc.cluster.local:8080
+
+      - job_name: review-service
+        metrics_path: /api/actuator/prometheus
+        static_configs:
+          - targets:
+              - review-service.default.svc.cluster.local:8080
+
+  alert-rules.yml: |
+    groups:
+      - name: microservice-availability
+        interval: 5s
+        rules:
+          - alert: MicroserviceDown
+            expr: up{job=~"venue-service|order-service|review-service|payment-service"} == 0
+            for: 15s
+            labels:
+              severity: critical
+            annotations:
+              summary: "Microservice {{ $labels.job }} is down"
+              description: "Prometheus cannot scrape {{ $labels.instance }}."
+
+      - name: application-metrics
+        interval: 5s
+        rules:
+          - alert: TooManyNotReadyOrders
+            expr: orders_not_ready > 10
+            for: 15s
+            labels:
+              severity: warning
+            annotations:
+              summary: "Too many orders are not ready"
+              description: "The current not-ready order count is {{ $value }}."
+
+          - alert: HighOrderCancellationRate
+            expr: increase(orders_cancelled_total[5m]) >= 5
+            for: 10s
+            labels:
+              severity: warning
+            annotations:
+              summary: "Order cancellation rate is high"
+              description: "At least five cancellations occurred in five minutes."
