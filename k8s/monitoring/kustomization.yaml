@@ -7,3 +7,10 @@ resources:
   - alertmanager-config.yaml
   - alertmanager-deployment.yaml
   - alert-secret.yaml
+  - otel-collector-config.yaml
+  - otel-collector.yaml
+  - tempo.yaml
+  - loki.yaml
+  - grafana-datasources.yaml
+  - grafana.yaml
+  - alloy.yaml
