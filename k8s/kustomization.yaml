@@ -9,3 +9,5 @@ resources:
   - ../../payment-service/k8s
   - ./kafka.yaml
   - ./monitoring
+  - service-ingresses.yaml
+  - ./network-policies
