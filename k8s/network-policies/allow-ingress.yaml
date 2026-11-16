@@ -32,6 +32,19 @@ spec:
             matchLabels:
               app: api-gateway
 
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - order-service
+                  - user-service
+                  - venue-service
+                  - review-service
+                  - payment-service
+
       ports:
         - protocol: TCP
           port: 8080
+        - protocol: TCP
+          port: 9090
