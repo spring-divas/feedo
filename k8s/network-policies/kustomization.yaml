@@ -4,4 +4,6 @@ kind: Kustomization
 resources:
   - allow-database-access.yaml
   - allow-ingress.yaml
+  - allow-kafka.yaml
+  - allow-monitoring.yaml
   - default-deny.yaml
