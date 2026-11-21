@@ -3,7 +3,6 @@ package org.spring.divas.loadtests.config;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.time.Duration;
 import java.util.Properties;
 import lombok.experimental.UtilityClass;
 
@@ -14,12 +13,6 @@ public class LoadTestConfig {
   private static final Properties FILE_PROPERTIES = loadFileProperties();
 
   public static final String BASE_URL = read("baseUrl", "BASE_URL");
-  public static final double USERS_PER_SEC =
-      Double.parseDouble(read("usersPerSec", "USERS_PER_SEC"));
-  public static final Duration RAMP =
-      Duration.ofSeconds(Long.parseLong(read("rampSeconds", "RAMP_SECONDS")));
-  public static final Duration DURATION =
-      Duration.ofSeconds(Long.parseLong(read("durationSeconds", "DURATION_SECONDS")));
 
   private static String read(String property, String envVar) {
     String value = System.getProperty(property);

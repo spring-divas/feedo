@@ -10,7 +10,6 @@ import static io.gatling.javaapi.core.CoreDsl.scenario;
 import io.gatling.javaapi.core.ScenarioBuilder;
 import io.gatling.javaapi.core.Simulation;
 import java.time.Duration;
-import org.spring.divas.loadtests.config.LoadTestConfig;
 import org.spring.divas.loadtests.config.Protocols;
 
 public class MenuBrowsingSimulation extends Simulation {
@@ -23,6 +22,9 @@ public class MenuBrowsingSimulation extends Simulation {
   private static final double MIN_SUCCESS_PERCENT = 99.0;
   private static final double RESPONSE_TIME_PERCENTILE = 95.0;
   private static final int MAX_RESPONSE_TIME_MS = 500;
+  private static final double USERS_PER_SEC = 20;
+  private static final Duration RAMP_SECONDS = Duration.ofSeconds(30);
+  private static final Duration DURATION_SECONDS = Duration.ofSeconds(60);
 
   private static final ScenarioBuilder BROWSE_MENUS =
       scenario("Customers browse menus")
@@ -40,9 +42,9 @@ public class MenuBrowsingSimulation extends Simulation {
     setUp(
         BROWSE_MENUS.injectOpen(
             rampUsersPerSec(RAMP_START_USERS_PER_SEC)
-                .to(LoadTestConfig.USERS_PER_SEC)
-                .during(LoadTestConfig.RAMP),
-            constantUsersPerSec(LoadTestConfig.USERS_PER_SEC).during(LoadTestConfig.DURATION)))
+                .to(USERS_PER_SEC)
+                .during(RAMP_SECONDS),
+            constantUsersPerSec(USERS_PER_SEC).during(DURATION_SECONDS)))
         .protocols(Protocols.HTTP)
         .assertions(
             global().successfulRequests().percent().gte(MIN_SUCCESS_PERCENT),
