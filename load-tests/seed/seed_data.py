@@ -280,6 +280,9 @@ def prepare_reviews(api, out_dir, rows, workers):
     print(f"[reviews] preparing {rows} review rows from {api.base}")
     orders = api.get("/order/api/order") or []
     blocked_venues = {(o["userId"], o["venueId"]) for o in orders if o["status"] != "NEW"}
+    blocked_venues |= {(r["user"]["id"], r["venueId"])
+                       for r in api.get("/review/api/review/venue") or []
+                       if (r.get("user") or {}).get("id") is not None}
     blocked_dishes = {(o["userId"], i["dishId"])
                       for o in orders if o["status"] != "NEW" for i in o["items"]}
 
