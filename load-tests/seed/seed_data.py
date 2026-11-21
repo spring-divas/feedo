@@ -181,6 +181,7 @@ class Api:
                     break  # client error: retrying won't help
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
                 last = f"{method} {path} -> {e}"
+                self.last_status, self.last_error = None, last
             time.sleep(0.5 * (2 ** attempt))
         with self.lock:
             self.errors += 1
@@ -263,6 +264,40 @@ def required_review_rows():
     return int(users_per_sec * seconds + 0.999999)
 
 
+REVIEW_ROWS_PER_CUSTOMER = 20
+REVIEW_CUSTOMER_PASSWORD = "Password123!"
+
+
+def require(api, result, what):
+    if result is None:
+        sys.exit(f"Could not load {what}. Is the service up? Last error: {api.last_error}")
+    return result
+
+
+def load_venue_catalog(api):
+    """Venues that have both tables and dishes, with their table and dish IDs."""
+    tables, dishes = {}, {}
+    for t in require(api, api.get("/venue/api/table"), "tables from venue-service"):
+        if t.get("id") is not None:
+            tables.setdefault(t["venueId"], []).append(t["id"])
+    for d in require(api, api.get("/venue/api/dish"), "dishes from venue-service"):
+        dishes.setdefault(d["venueId"], []).append(d["id"])
+    venues = [v for v in tables if v in dishes]
+    if not venues:
+        sys.exit("No venues with both tables and dishes; run the seeder first.")
+    return venues, tables, dishes
+
+
+def create_customer(api, run_id, index, label="customer"):
+    first, last = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
+    r = api.post("/user/api/user/customer", {
+        "firstName": first, "lastName": last,
+        "email": f"{first.lower()}.{last.lower()}.{label}{index}.{run_id}@feedo.test",
+        "password": REVIEW_CUSTOMER_PASSWORD,
+    })
+    return r["id"] if r else None
+
+
 def export_feeders(api, out_dir, rows):
     """Write feeders/orders.csv from the data currently in the cluster.
 
@@ -270,16 +305,11 @@ def export_feeders(api, out_dir, rows):
     1-4 of that venue's dishes ("|"-separated).
     """
     print(f"[export] building Gatling feeders from {api.base}")
-    customers = [u["id"] for u in api.get("/user/api/user") or [] if u.get("role") == "CUSTOMER"]
-    tables, dishes = {}, {}
-    for t in api.get("/venue/api/table") or []:
-        if t.get("id") is not None:
-            tables.setdefault(t["venueId"], []).append(t["id"])
-    for d in api.get("/venue/api/dish") or []:
-        dishes.setdefault(d["venueId"], []).append(d["id"])
-    venues = [v for v in tables if v in dishes]
-    if not customers or not venues:
-        sys.exit("[export] no customers or no venues with both tables and dishes; seed first.")
+    users = require(api, api.get("/user/api/user"), "users from user-service")
+    customers = [u["id"] for u in users if u.get("role") == "CUSTOMER"]
+    if not customers:
+        sys.exit("[export] no customers; run the seeder first.")
+    venues, tables, dishes = load_venue_catalog(api)
 
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.normpath(os.path.join(out_dir, "orders.csv"))
@@ -294,59 +324,57 @@ def export_feeders(api, out_dir, rows):
     print(f"  orders.csv: {rows} rows ({len(customers)} customers, {len(venues)} venues) -> {path}")
 
 
-def prepare_reviews(api, out_dir, rows, workers):
+def prepare_reviews(api, out_dir, rows, workers, order_workers):
     """Write feeders/reviews.csv with (user, venue, dish) rows that can each be reviewed once.
 
-    review-service only accepts a dish review for a READY order containing the dish, and one
-    review per (user, venue) and (user, dish). This marks fresh NEW orders as READY and skips
-    pairs from any order past NEW, since those may already have been reviewed.
+    review-service accepts one review per (user, venue) and (user, dish), and a dish review only
+    for a READY order containing the dish. Fresh customers have no orders or reviews, so each row
+    gets a new customer/venue pair and a READY order created for it.
     """
     print(f"[reviews] preparing {rows} review rows from {api.base}")
-    orders = api.get("/order/api/order") or []
-    blocked_venues = {(o["userId"], o["venueId"]) for o in orders if o["status"] != "NEW"}
-    blocked_venues |= {(r["user"]["id"], r["venueId"])
-                       for r in api.get("/review/api/review/venue") or []
-                       if (r.get("user") or {}).get("id") is not None}
-    blocked_dishes = {(o["userId"], i["dishId"])
-                      for o in orders if o["status"] != "NEW" for i in o["items"]}
+    venues, tables, dishes = load_venue_catalog(api)
+    per_customer = min(len(venues), REVIEW_ROWS_PER_CUSTOMER)
+    run_id = uuid.uuid4().hex[:6]
 
-    candidates = [o for o in orders if o["status"] == "NEW" and o.get("items")]
-    random.shuffle(candidates)
-    picked = []
-    for o in candidates:
-        if len(picked) == rows:
-            break
-        venue_pair = (o["userId"], o["venueId"])
-        dish = next((i["dishId"] for i in o["items"]
-                     if (o["userId"], i["dishId"]) not in blocked_dishes), None)
-        if venue_pair in blocked_venues or dish is None:
-            continue
-        blocked_venues.add(venue_pair)
-        blocked_dishes.add((o["userId"], dish))
-        picked.append((o, dish))
+    customer_count = -(-rows // per_customer)
+    res = run_parallel(workers, lambda i: create_customer(api, run_id, i, "reviewer"),
+                       range(customer_count), "review customers")
+    customers = [c for c in res if c]
+    if not customers:
+        sys.exit(f"Could not create customers in user-service: {api.last_error}")
 
-    if len(picked) < rows:
-        print(f"  ! only {len(picked)} eligible NEW orders; run the seeder to create more orders")
+    jobs = []
+    for customer in customers:
+        for venue in random.sample(venues, per_customer):
+            if len(jobs) < rows:
+                jobs.append((customer, venue, random.choice(tables[venue]),
+                             random.choice(dishes[venue])))
 
-    def mark_ready(job):
-        o, _ = job
-        return api.put(f"/order/api/order/{o['id']}", {
-            "userId": o["userId"], "venueId": o["venueId"], "tableId": o["tableId"],
-            "status": "READY",
-            "items": [{"dishId": i["dishId"], "quantity": i["quantity"]} for i in o["items"]],
-        })
+    def create_ready_order(job):
+        customer, venue, table, dish = job
+        body = {"userId": customer, "venueId": venue, "tableId": table,
+                "items": [{"dishId": dish, "quantity": 1}]}
+        created = api.post("/order/api/order", body)
+        if not created:
+            return None
+        return api.put(f"/order/api/order/{created['id']}", {**body, "status": "READY"})
 
-    res = run_parallel(workers, mark_ready, picked, "mark orders READY")
-    ready = [(o, dish) for (o, dish), r in zip(picked, res) if r]
+    res = run_parallel(order_workers, create_ready_order, jobs, "READY orders")
+    ready = [job for job, r in zip(jobs, res) if r]
 
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.normpath(os.path.join(out_dir, "reviews.csv"))
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["userId", "venueId", "dishId"])
-        for o, dish in ready:
-            writer.writerow([o["userId"], o["venueId"], dish])
+        for customer, venue, _, dish in ready:
+            writer.writerow([customer, venue, dish])
     print(f"  reviews.csv: {len(ready)} rows (each usable once) -> {path}")
+
+    if len(ready) < rows:
+        for sample in api.error_samples:
+            print(f"    {sample}")
+        sys.exit(f"Only {len(ready)}/{rows} rows prepared; order-service rejected or dropped the rest.")
 
 
 # ---------------------------------------------------------------------------
@@ -590,8 +618,9 @@ def main():
     p.add_argument("--export-rows", type=int, default=5000, help="rows in orders.csv")
     p.add_argument("--export-dir", default=DEFAULT_FEEDER_DIR, help="feeder output directory")
     p.add_argument("--prepare-reviews", action="store_true",
-                   help="skip seeding; mark orders READY and write reviews.csv (run before "
-                        "every ReviewCreationSimulation run, rows are consumed)")
+                   help="skip seeding; create fresh customers with READY orders and write "
+                        "reviews.csv (run before every ReviewCreationSimulation run, rows are "
+                        "consumed)")
     p.add_argument("--review-rows", type=int, default=None,
                    help="rows in reviews.csv (default: enough for the users configured in "
                         "load-test.properties / env)")
@@ -605,7 +634,7 @@ def main():
             export_feeders(api, args.export_dir, args.export_rows)
         if args.prepare_reviews:
             rows = args.review_rows if args.review_rows is not None else required_review_rows()
-            prepare_reviews(api, args.export_dir, rows, args.order_workers)
+            prepare_reviews(api, args.export_dir, rows, args.workers, args.order_workers)
     else:
         seed(args)
 
