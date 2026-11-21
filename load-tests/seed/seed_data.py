@@ -237,6 +237,30 @@ def check_reachable(api, base_url):
 
 DEFAULT_FEEDER_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                   "..", "src", "gatling", "resources", "feeders")
+LOAD_TEST_PROPERTIES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "..", "src", "gatling", "resources", "load-test.properties")
+
+
+def load_test_setting(prop, env_var):
+    """Same lookup as LoadTestConfig (minus -D): environment variable, then load-test.properties."""
+    value = os.environ.get(env_var, "").strip()
+    if not value and os.path.exists(LOAD_TEST_PROPERTIES):
+        with open(LOAD_TEST_PROPERTIES) as f:
+            for line in f:
+                key, sep, val = line.partition("=")
+                if sep and key.strip() == prop:
+                    value = val.strip()
+    if not value:
+        sys.exit(f"Missing load test setting '{prop}' ({env_var} or {LOAD_TEST_PROPERTIES})")
+    return float(value)
+
+
+def required_review_rows():
+    """Upper bound of users ReviewCreationSimulation injects: the ramp never exceeds usersPerSec."""
+    users_per_sec = load_test_setting("usersPerSec", "USERS_PER_SEC")
+    seconds = (load_test_setting("rampSeconds", "RAMP_SECONDS")
+               + load_test_setting("durationSeconds", "DURATION_SECONDS"))
+    return int(users_per_sec * seconds + 0.999999)
 
 
 def export_feeders(api, out_dir, rows):
@@ -568,7 +592,9 @@ def main():
     p.add_argument("--prepare-reviews", action="store_true",
                    help="skip seeding; mark orders READY and write reviews.csv (run before "
                         "every ReviewCreationSimulation run, rows are consumed)")
-    p.add_argument("--review-rows", type=int, default=2000, help="rows in reviews.csv")
+    p.add_argument("--review-rows", type=int, default=None,
+                   help="rows in reviews.csv (default: enough for the users configured in "
+                        "load-test.properties / env)")
     args = p.parse_args()
 
     if args.export_only or args.prepare_reviews:
@@ -578,7 +604,8 @@ def main():
         if args.export_only:
             export_feeders(api, args.export_dir, args.export_rows)
         if args.prepare_reviews:
-            prepare_reviews(api, args.export_dir, args.review_rows, args.order_workers)
+            rows = args.review_rows if args.review_rows is not None else required_review_rows()
+            prepare_reviews(api, args.export_dir, rows, args.order_workers)
     else:
         seed(args)
 

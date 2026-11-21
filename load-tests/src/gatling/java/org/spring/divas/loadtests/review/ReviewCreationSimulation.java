@@ -33,6 +33,7 @@ public class ReviewCreationSimulation extends Simulation {
           .exec(ReviewRequests.CREATE_VENUE_REVIEW);
 
   {
+    requireEnoughReviewRows();
     setUp(
         CREATE_REVIEWS.injectOpen(
             rampUsersPerSec(RAMP_START_USERS_PER_SEC)
@@ -43,5 +44,18 @@ public class ReviewCreationSimulation extends Simulation {
         .assertions(
             global().successfulRequests().percent().gte(MIN_SUCCESS_PERCENT),
             global().responseTime().percentile(RESPONSE_TIME_PERCENTILE).lt(MAX_RESPONSE_TIME_MS));
+  }
+
+  private static void requireEnoughReviewRows() {
+    double rampUsers = (RAMP_START_USERS_PER_SEC + LoadTestConfig.USERS_PER_SEC) / 2
+        * LoadTestConfig.RAMP.toSeconds();
+    double constantUsers = LoadTestConfig.USERS_PER_SEC * LoadTestConfig.DURATION.toSeconds();
+    long requiredRows = (long) Math.ceil(rampUsers + constantUsers);
+    int availableRows = REVIEWS.recordsCount();
+    if (availableRows < requiredRows) {
+      throw new IllegalStateException(
+          "%s has %d rows but this run needs %d; run seed_data.py --prepare-reviews --review-rows %d"
+              .formatted(REVIEWS_FEEDER_PATH, availableRows, requiredRows, requiredRows));
+    }
   }
 }
