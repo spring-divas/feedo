@@ -34,7 +34,7 @@ public class OrderCreationSimulation extends Simulation {
           .pause(THINK_TIME_BEFORE_GET)
           .exec(OrderRequests.GET_ORDER);
 
-  {
+  public OrderCreationSimulation() {
     setUp(
         CREATE_ORDERS.injectOpen(
             rampUsersPerSec(RAMP_START_USERS_PER_SEC)
