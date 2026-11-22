@@ -46,13 +46,21 @@ from concurrent.futures import ThreadPoolExecutor
 
 TTY = sys.stdout.isatty()
 
+# Test-data generation only: values are not security-sensitive and must be reproducible with --seed.
+RNG = random.Random()  # NOSONAR
+
+ORDER_API = "/order/api/order"
+USER_PASSWORD = "Password123!"
+
 # ---------------------------------------------------------------------------
 # Static vocabularies
 # ---------------------------------------------------------------------------
 
+TREE_NUTS = "Tree nuts"
+
 ALLERGENS = [
     "Gluten", "Crustaceans", "Eggs", "Fish", "Peanuts", "Soybeans", "Milk",
-    "Tree nuts", "Celery", "Mustard", "Sesame", "Sulphites", "Lupin", "Molluscs",
+    TREE_NUTS, "Celery", "Mustard", "Sesame", "Sulphites", "Lupin", "Molluscs",
 ]
 
 # ingredient -> allergens it contains
@@ -60,8 +68,8 @@ INGREDIENTS = {
     "Wheat flour": ["Gluten"], "Mozzarella": ["Milk"], "Parmesan": ["Milk"],
     "Butter": ["Milk"], "Cream": ["Milk"], "Egg": ["Eggs"], "Shrimp": ["Crustaceans"],
     "Salmon": ["Fish"], "Tuna": ["Fish"], "Cod": ["Fish"], "Peanut sauce": ["Peanuts"],
-    "Tofu": ["Soybeans"], "Soy sauce": ["Soybeans", "Gluten"], "Almonds": ["Tree nuts"],
-    "Walnuts": ["Tree nuts"], "Celery": ["Celery"], "Dijon mustard": ["Mustard"],
+    "Tofu": ["Soybeans"], "Soy sauce": ["Soybeans", "Gluten"], "Almonds": [TREE_NUTS],
+    "Walnuts": [TREE_NUTS], "Celery": ["Celery"], "Dijon mustard": ["Mustard"],
     "Sesame seeds": ["Sesame"], "Tahini": ["Sesame"], "White wine": ["Sulphites"],
     "Mussels": ["Molluscs"], "Squid": ["Molluscs"], "Pasta": ["Gluten", "Eggs"],
     "Brioche bun": ["Gluten", "Eggs", "Milk"], "Mayonnaise": ["Eggs", "Mustard"],
@@ -72,7 +80,7 @@ INGREDIENTS = {
     "Coriander": [], "Ginger": [], "Black beans": [], "Corn": [], "Chickpeas": [],
     "Dark chocolate": ["Milk"], "Strawberries": [], "Mango": [], "Coconut milk": [],
     "Honey": [], "Bacon": [], "Cheddar": ["Milk"], "Feta": ["Milk"], "Olives": [],
-    "Pesto": ["Tree nuts", "Milk"],
+    "Pesto": [TREE_NUTS, "Milk"],
 }
 
 CUISINES = {
@@ -157,6 +165,22 @@ class Api:
         self.last_status = None
         self.last_error = None
 
+    def _send(self, req):
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            raw = resp.read()
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except ValueError:
+            return raw.decode()
+
+    def _record_failure(self, error, quiet):
+        with self.lock:
+            self.errors += 1
+            if not quiet and len(self.error_samples) < 10:
+                self.error_samples.append(error)
+
     def call(self, method, path, body=None, headers=None, retries=3, quiet=False):
         url = f"{self.base}{path}"
         data = json.dumps(body).encode() if body is not None else None
@@ -166,14 +190,7 @@ class Api:
         for attempt in range(retries):
             req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                    raw = resp.read()
-                    if not raw:
-                        return {}
-                    try:
-                        return json.loads(raw)
-                    except ValueError:
-                        return raw.decode()
+                return self._send(req)
             except urllib.error.HTTPError as e:
                 last = f"{method} {path} -> {e.code} {e.read()[:200].decode(errors='replace')}"
                 self.last_status, self.last_error = e.code, last
@@ -183,10 +200,7 @@ class Api:
                 last = f"{method} {path} -> {e}"
                 self.last_status, self.last_error = None, last
             time.sleep(0.5 * (2 ** attempt))
-        with self.lock:
-            self.errors += 1
-            if not quiet and len(self.error_samples) < 10:
-                self.error_samples.append(last)
+        self._record_failure(last, quiet)
         return None
 
     def post(self, path, body=None, **kw):
@@ -223,7 +237,7 @@ def run_parallel(workers, fn, items, label):
 
 
 def price():
-    return round(random.uniform(3.5, 32.0) * 2) / 2  # .0 / .5 prices
+    return round(RNG.uniform(3.5, 32.0) * 2) / 2  # .0 / .5 prices
 
 
 def check_reachable(api, base_url):
@@ -265,7 +279,6 @@ def required_review_rows():
 
 
 REVIEW_ROWS_PER_CUSTOMER = 20
-REVIEW_CUSTOMER_PASSWORD = "Password123!"
 
 
 def require(api, result, what):
@@ -288,12 +301,12 @@ def load_venue_catalog(api):
     return venues, tables, dishes
 
 
-def create_customer(api, run_id, index, label="customer"):
-    first, last = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
-    r = api.post("/user/api/user/customer", {
+def create_user(api, run_id, index, role="customer", label=None):
+    first, last = RNG.choice(FIRST_NAMES), RNG.choice(LAST_NAMES)
+    r = api.post(f"/user/api/user/{role}", {
         "firstName": first, "lastName": last,
-        "email": f"{first.lower()}.{last.lower()}.{label}{index}.{run_id}@feedo.test",
-        "password": REVIEW_CUSTOMER_PASSWORD,
+        "email": f"{first.lower()}.{last.lower()}.{label or role}{index}.{run_id}@feedo.test",
+        "password": USER_PASSWORD,
     })
     return r["id"] if r else None
 
@@ -317,9 +330,9 @@ def export_feeders(api, out_dir, rows):
         writer = csv.writer(f)
         writer.writerow(["userId", "venueId", "tableId", "dishIds"])
         for _ in range(rows):
-            v = random.choice(venues)
-            picked = random.sample(dishes[v], k=min(len(dishes[v]), random.randint(1, 4)))
-            writer.writerow([random.choice(customers), v, random.choice(tables[v]),
+            v = RNG.choice(venues)
+            picked = RNG.sample(dishes[v], k=min(len(dishes[v]), RNG.randint(1, 4)))
+            writer.writerow([RNG.choice(customers), v, RNG.choice(tables[v]),
                              "|".join(map(str, picked))])
     print(f"  orders.csv: {rows} rows ({len(customers)} customers, {len(venues)} venues) -> {path}")
 
@@ -337,7 +350,7 @@ def prepare_reviews(api, out_dir, rows, workers, order_workers):
     run_id = uuid.uuid4().hex[:6]
 
     customer_count = -(-rows // per_customer)
-    res = run_parallel(workers, lambda i: create_customer(api, run_id, i, "reviewer"),
+    res = run_parallel(workers, lambda i: create_user(api, run_id, i, label="reviewer"),
                        range(customer_count), "review customers")
     customers = [c for c in res if c]
     if not customers:
@@ -345,19 +358,19 @@ def prepare_reviews(api, out_dir, rows, workers, order_workers):
 
     jobs = []
     for customer in customers:
-        for venue in random.sample(venues, per_customer):
+        for venue in RNG.sample(venues, per_customer):
             if len(jobs) < rows:
-                jobs.append((customer, venue, random.choice(tables[venue]),
-                             random.choice(dishes[venue])))
+                jobs.append((customer, venue, RNG.choice(tables[venue]),
+                             RNG.choice(dishes[venue])))
 
     def create_ready_order(job):
         customer, venue, table, dish = job
         body = {"userId": customer, "venueId": venue, "tableId": table,
                 "items": [{"dishId": dish, "quantity": 1}]}
-        created = api.post("/order/api/order", body)
+        created = api.post(ORDER_API, body)
         if not created:
             return None
-        return api.put(f"/order/api/order/{created['id']}", {**body, "status": "READY"})
+        return api.put(f"{ORDER_API}/{created['id']}", {**body, "status": "READY"})
 
     res = run_parallel(order_workers, create_ready_order, jobs, "READY orders")
     ready = [job for job, r in zip(jobs, res) if r]
@@ -382,130 +395,124 @@ def prepare_reviews(api, out_dir, rows, workers, order_workers):
 # ---------------------------------------------------------------------------
 
 
-def seed(args):
-    random.seed(args.seed)
-    api = Api(args.base_url)
-    run_id = uuid.uuid4().hex[:6]
-    w = args.workers
-    ow = args.order_workers  # order-service exhausts its DB pool under high /pay concurrency
-
-    check_reachable(api, args.base_url)
-
-    print(f"Seeding {args.base_url} (run id {run_id})")
-
-    # --- venue-and-menu-service: allergens & ingredients ----------------------
+def seed_allergens_and_ingredients(api, run_id, workers):
     print("[venue] allergens & ingredients")
-    allergen_ids = {}
-    res = run_parallel(w, lambda n: api.post("/venue/api/allergen", {"name": f"{n} {run_id}"}),
+    res = run_parallel(workers, lambda n: api.post("/venue/api/allergen", {"name": f"{n} {run_id}"}),
                        ALLERGENS, "allergens")
-    for name, r in zip(ALLERGENS, res):
-        if r:
-            allergen_ids[name] = r["id"]
+    allergen_ids = {name: r["id"] for name, r in zip(ALLERGENS, res) if r}
 
-    ing_names = list(INGREDIENTS)
-    res = run_parallel(w, lambda n: api.post("/venue/api/ingredient", {
+    res = run_parallel(workers, lambda n: api.post("/venue/api/ingredient", {
         "name": f"{n} {run_id}",
-        "quantity": random.randint(0, 500),
+        "quantity": RNG.randint(0, 500),
         "allergens": [allergen_ids[a] for a in INGREDIENTS[n] if a in allergen_ids],
-    }), ing_names, "ingredients")
+    }), list(INGREDIENTS), "ingredients")
     ingredient_ids = [r["id"] for r in res if r and r.get("id") is not None]
+    return allergen_ids, ingredient_ids
 
-    # --- venues ---------------------------------------------------------------
+
+def create_venue(api, i):
+    cuisine = RNG.choice(list(CUISINES))
+    name = f"{RNG.choice(VENUE_WORDS)} {RNG.choice(VENUE_NOUNS)} #{i} ({cuisine})"
+    addr = f"{RNG.randint(1, 200)} {RNG.choice(STREETS)}, {RNG.choice(CITIES)}"
+    r = api.post("/venue/api/venue", {"name": name[:150], "address": addr})
+    return {"id": r["id"], "cuisine": cuisine} if r else None
+
+
+def attach_ids(jobs, results, key):
+    """Append the id of each successful result to its venue (first element of the job)."""
+    for (venue, _), r in zip(jobs, results):
+        if r and r.get("id") is not None:
+            venue.setdefault(key, []).append(r["id"])
+
+
+def dish_names(cuisine, count):
+    names = CUISINES[cuisine]["dishes"]
+    for i in range(count):
+        base = names[i % len(names)]
+        yield base if i < len(names) else f"{base} Special {i // len(names)}"
+
+
+def dish_body(venue, name, ingredient_ids):
+    return {
+        "venueId": venue["id"],
+        "category": RNG.choice(venue["categories"]),
+        "name": name,
+        "description": f"House {name.lower()} made fresh daily.",
+        "price": price(),
+        "ingredients": RNG.sample(ingredient_ids, k=min(len(ingredient_ids),
+                                                           RNG.randint(2, 6))),  # [] if none
+    }
+
+
+def seed_venues(api, args, ingredient_ids):
     print("[venue] venues, tables, categories, dishes")
-
-    def make_venue(i):
-        cuisine = random.choice(list(CUISINES))
-        name = f"{random.choice(VENUE_WORDS)} {random.choice(VENUE_NOUNS)} #{i} ({cuisine})"
-        addr = f"{random.randint(1, 200)} {random.choice(STREETS)}, {random.choice(CITIES)}"
-        r = api.post("/venue/api/venue", {"name": name[:150], "address": addr})
-        return {"id": r["id"], "cuisine": cuisine} if r else None
-
-    venues = [v for v in run_parallel(w, make_venue, range(args.venues), "venues") if v]
+    w = args.workers
+    venues = [v for v in run_parallel(w, lambda i: create_venue(api, i), range(args.venues), "venues")
+              if v]
 
     table_jobs = [(v, i) for v in venues for i in range(args.tables_per_venue)]
     res = run_parallel(w, lambda j: api.post("/venue/api/table", {
-        "venueId": j[0]["id"], "isAvailable": random.random() < 0.8,
+        "venueId": j[0]["id"], "isAvailable": RNG.random() < 0.8,
     }), table_jobs, "tables")
-    for (v, _), r in zip(table_jobs, res):
-        if r and r.get("id") is not None:
-            v.setdefault("tables", []).append(r["id"])
+    attach_ids(table_jobs, res, "tables")
 
     cat_jobs = [(v, c) for v in venues for c in CUISINES[v["cuisine"]]["categories"]]
     res = run_parallel(w, lambda j: api.post("/venue/api/category", {
         "venueId": j[0]["id"], "name": j[1],
     }), cat_jobs, "categories")
-    for (v, _), r in zip(cat_jobs, res):
-        if r:
-            v.setdefault("categories", []).append(r["id"])
+    attach_ids(cat_jobs, res, "categories")
 
-    dish_jobs = []
-    for v in venues:
-        if not v.get("categories"):
-            continue
-        names = CUISINES[v["cuisine"]]["dishes"]
-        for i in range(args.dishes_per_venue):
-            base = names[i % len(names)]
-            name = base if i < len(names) else f"{base} Special {i // len(names)}"
-            dish_jobs.append((v, name))
-    res = run_parallel(w, lambda j: api.post("/venue/api/dish", {
-        "venueId": j[0]["id"],
-        "category": random.choice(j[0]["categories"]),
-        "name": j[1],
-        "description": f"House {j[1].lower()} made fresh daily.",
-        "price": price(),
-        "ingredients": random.sample(ingredient_ids, k=min(len(ingredient_ids),
-                                                           random.randint(2, 6))),  # [] if none
-    }), dish_jobs, "dishes")
-    for (v, _), r in zip(dish_jobs, res):
-        if r:
-            v.setdefault("dishes", []).append(r["id"])
+    dish_jobs = [(v, name) for v in venues if v.get("categories")
+                 for name in dish_names(v["cuisine"], args.dishes_per_venue)]
+    res = run_parallel(w, lambda j: api.post("/venue/api/dish", dish_body(j[0], j[1], ingredient_ids)),
+                       dish_jobs, "dishes")
+    attach_ids(dish_jobs, res, "dishes")
 
     venues = [v for v in venues if v.get("tables") and v.get("dishes")]
     if not venues:
         sys.exit("No usable venues (each needs tables and dishes with IDs). "
                  "Check venue-service responses.")
+    return venues
 
-    # --- user-service ---------------------------------------------------------
+
+def venue_manager_jobs(venues, managers):
+    return [{"userId": m, "venueId": v["id"], "managerLevel": RNG.choice(["JUNIOR", "SENIOR"])}
+            for v in venues
+            for m in RNG.sample(managers, k=min(len(managers), RNG.randint(1, 2)))]
+
+
+def allergy_jobs_for(customers, allergen_ids):
+    jobs = []
+    for c in customers:
+        if RNG.random() < 0.3:
+            jobs.extend((c, a) for a in RNG.sample(list(allergen_ids.values()), k=RNG.randint(1, 2)))
+    return jobs
+
+
+def seed_users(api, run_id, args, venues, allergen_ids):
     print("[user] customers, managers, venue managers, allergies")
-
-    def make_user(job):
-        role, i = job
-        fn, ln = random.choice(FIRST_NAMES), random.choice(LAST_NAMES)
-        r = api.post(f"/user/api/user/{role}", {
-            "firstName": fn, "lastName": ln,
-            "email": f"{fn.lower()}.{ln.lower()}.{role}{i}.{run_id}@feedo.test",
-            "password": "Password123!",
-        })
-        return r["id"] if r else None
-
+    w = args.workers
     customers = [u for u in run_parallel(
-        w, make_user, [("customer", i) for i in range(args.customers)], "customers") if u]
+        w, lambda i: create_user(api, run_id, i, "customer"), range(args.customers), "customers") if u]
     managers = [u for u in run_parallel(
-        w, make_user, [("manager", i) for i in range(args.managers)], "managers") if u]
+        w, lambda i: create_user(api, run_id, i, "manager"), range(args.managers), "managers") if u]
 
-    vm_jobs = []
-    for v in venues:
-        for m in random.sample(managers, k=min(len(managers), random.randint(1, 2))):
-            vm_jobs.append({"userId": m, "venueId": v["id"],
-                            "managerLevel": random.choice(["JUNIOR", "SENIOR"])})
+    vm_jobs = venue_manager_jobs(venues, managers)
     run_parallel(w, lambda b: api.post("/user/api/venue-manager", b), vm_jobs, "venue managers")
 
-    allergy_jobs = []
-    for c in customers:
-        if random.random() < 0.3:
-            for a in random.sample(list(allergen_ids.values()), k=random.randint(1, 2)):
-                allergy_jobs.append((c, a))
+    allergy_jobs = allergy_jobs_for(customers, allergen_ids)
     run_parallel(w, lambda j: api.post(f"/user/api/allergy?userId={j[0]}&allergenId={j[1]}"),
                  allergy_jobs, "user allergies")
+    return customers, managers, len(vm_jobs), len(allergy_jobs)
 
-    # --- order-service --------------------------------------------------------
-    # order-service keeps a replica of dishes synced over gRPC from venue-service;
-    # wait until the last created dish is orderable before bulk ordering.
+
+def wait_for_dish_sync(api, venues, customers):
+    """order-service keeps a replica of dishes synced over gRPC from venue-service;
+    wait until the last created dish is orderable before bulk ordering."""
     print("[order] waiting for dish sync to order-service", end="", flush=True)
     probe_v = venues[-1]
-    probe = None
     for _ in range(60):
-        probe = api.post("/order/api/order", {
+        probe = api.post(ORDER_API, {
             "userId": customers[0], "venueId": probe_v["id"], "tableId": probe_v["tables"][0],
             "items": [{"dishId": probe_v["dishes"][-1], "quantity": 1}],
         }, retries=1, quiet=True)
@@ -521,76 +528,113 @@ def seed(args):
     api.error_samples.clear()
     print(" ok")
 
-    def make_order(_):
-        user = random.choice(customers)
-        v = random.choice(venues)
-        dishes = random.sample(v["dishes"], k=min(len(v["dishes"]), random.randint(1, 4)))
-        body = {
-            "userId": user, "venueId": v["id"], "tableId": random.choice(v["tables"]),
-            "items": [{"dishId": d, "quantity": random.randint(1, 3)} for d in dishes],
-        }
-        r = api.post("/order/api/order", body)
-        return {"id": r["id"], "user": user, "venue": v["id"], "dishes": dishes,
-                "body": body} if r else None
 
-    orders = [o for o in run_parallel(ow, make_order, range(args.orders), "orders") if o]
+def create_order(api, customers, venues):
+    user = RNG.choice(customers)
+    v = RNG.choice(venues)
+    dishes = RNG.sample(v["dishes"], k=min(len(v["dishes"]), RNG.randint(1, 4)))
+    body = {
+        "userId": user, "venueId": v["id"], "tableId": RNG.choice(v["tables"]),
+        "items": [{"dishId": d, "quantity": RNG.randint(1, 3)} for d in dishes],
+    }
+    r = api.post(ORDER_API, body)
+    return {"id": r["id"], "user": user, "venue": v["id"], "dishes": dishes,
+            "body": body} if r else None
+
+
+def pay_order(api, order):
+    fail = "true" if RNG.random() < 0.05 else "false"
+    return api.post(f"{ORDER_API}/{order['id']}/pay?simulateFailure={fail}")
+
+
+def seed_orders(api, args, customers, venues):
+    ow = args.order_workers  # order-service exhausts its DB pool under high /pay concurrency
+    orders = [o for o in run_parallel(ow, lambda _: create_order(api, customers, venues),
+                                      range(args.orders), "orders") if o]
 
     # Lifecycle: ~65% paid, ~10% cancelled, rest stay NEW. Half of paid -> READY.
-    random.shuffle(orders)
+    RNG.shuffle(orders)
     n_pay = int(len(orders) * 0.65)
     n_cancel = int(len(orders) * 0.10)
     to_pay, to_cancel = orders[:n_pay], orders[n_pay:n_pay + n_cancel]
 
     print("[payment] paying orders via order-service -> payment-service (gRPC)")
-    res = run_parallel(ow, lambda o: api.post(
-        f"/order/api/order/{o['id']}/pay?simulateFailure={'true' if random.random() < 0.05 else 'false'}"),
-        to_pay, "payments")
+    res = run_parallel(ow, lambda o: pay_order(api, o), to_pay, "payments")
     paid = [o for o, r in zip(to_pay, res) if r and r.get("status") == "PAID"]
     print(f"  orders PAID: {len(paid)}  (others PAYMENT_FAILED / pending)")
 
     run_parallel(ow, lambda o: api.call(
-        "PATCH", f"/order/api/order/{o['id']}/cancel?reason=Changed%20my%20mind"),
+        "PATCH", f"{ORDER_API}/{o['id']}/cancel?reason=Changed%20my%20mind"),
         to_cancel, "cancellations")
 
     to_ready = paid[: len(paid) // 2 + 1] if paid else []
-    res = run_parallel(ow, lambda o: api.put(f"/order/api/order/{o['id']}",
+    res = run_parallel(ow, lambda o: api.put(f"{ORDER_API}/{o['id']}",
                                             {**o["body"], "status": "READY"}),
                        to_ready, "mark READY")
     ready = [o for o, r in zip(to_ready, res) if r]
+    return orders, paid, ready, to_cancel
 
-    # --- review-service -------------------------------------------------------
+
+def review_body(target_key, target_id, user):
+    rating = RNG.choices([5, 4, 3, 2, 1], weights=[35, 30, 18, 10, 7])[0]
+    return {"rating": rating, "content": RNG.choice(REVIEW_TEXTS[rating]),
+            target_key: target_id, "userId": user}
+
+
+def seed_reviews(api, args, orders, ready):
     print("[review] venue & dish reviews")
-
-    def review_body(target_key, target_id, user):
-        rating = random.choices([5, 4, 3, 2, 1], weights=[35, 30, 18, 10, 7])[0]
-        return {"rating": rating, "content": random.choice(REVIEW_TEXTS[rating]),
-                target_key: target_id, "userId": user}
-
+    w = args.workers
     venue_pairs = list({(o["user"], o["venue"]) for o in orders})
-    venue_pairs = random.sample(venue_pairs, k=int(len(venue_pairs) * args.review_ratio))
+    venue_pairs = RNG.sample(venue_pairs, k=int(len(venue_pairs) * args.review_ratio))
     run_parallel(w, lambda p: api.post("/review/api/review/venue",
                                        review_body("venueId", p[1], p[0])),
                  venue_pairs, "venue reviews")
 
     dish_pairs = list({(o["user"], d) for o in ready for d in o["dishes"]})
-    dish_pairs = random.sample(dish_pairs, k=int(len(dish_pairs) * args.review_ratio))
+    dish_pairs = RNG.sample(dish_pairs, k=int(len(dish_pairs) * args.review_ratio))
     run_parallel(w, lambda p: api.post("/review/api/review/dish",
                                        review_body("dishId", p[1], p[0])),
                  dish_pairs, "dish reviews")
+    return len(venue_pairs), len(dish_pairs)
 
-    # --- summary --------------------------------------------------------------
+
+def print_summary(api, counts):
     print("\nDone.")
-    print(f"  venues={len(venues)} tables={sum(len(v['tables']) for v in venues)} "
-          f"dishes={sum(len(v['dishes']) for v in venues)} ingredients={len(ingredient_ids)} "
-          f"allergens={len(allergen_ids)}")
-    print(f"  customers={len(customers)} managers={len(managers)} "
-          f"venue-managers={len(vm_jobs)} allergies={len(allergy_jobs)}")
-    print(f"  orders={len(orders)} paid={len(paid)} ready={len(ready)} cancelled~={len(to_cancel)}")
-    print(f"  venue-reviews~={len(venue_pairs)} dish-reviews~={len(dish_pairs)}")
+    print("  venues={venues} tables={tables} dishes={dishes} ingredients={ingredients} "
+          "allergens={allergens}".format(**counts))
+    print("  customers={customers} managers={managers} "
+          "venue-managers={venue_managers} allergies={allergies}".format(**counts))
+    print("  orders={orders} paid={paid} ready={ready} cancelled~={cancelled}".format(**counts))
+    print("  venue-reviews~={venue_reviews} dish-reviews~={dish_reviews}".format(**counts))
     if api.errors:
         print(f"\n  {api.errors} failed requests. Samples:")
         for s in api.error_samples:
             print(f"    {s}")
+
+
+def seed(args):
+    RNG.seed(args.seed)
+    api = Api(args.base_url)
+    run_id = uuid.uuid4().hex[:6]
+
+    check_reachable(api, args.base_url)
+    print(f"Seeding {args.base_url} (run id {run_id})")
+
+    allergen_ids, ingredient_ids = seed_allergens_and_ingredients(api, run_id, args.workers)
+    venues = seed_venues(api, args, ingredient_ids)
+    customers, managers, n_vm, n_allergies = seed_users(api, run_id, args, venues, allergen_ids)
+    wait_for_dish_sync(api, venues, customers)
+    orders, paid, ready, cancelled = seed_orders(api, args, customers, venues)
+    n_venue_reviews, n_dish_reviews = seed_reviews(api, args, orders, ready)
+
+    print_summary(api, {
+        "venues": len(venues), "tables": sum(len(v["tables"]) for v in venues),
+        "dishes": sum(len(v["dishes"]) for v in venues), "ingredients": len(ingredient_ids),
+        "allergens": len(allergen_ids), "customers": len(customers), "managers": len(managers),
+        "venue_managers": n_vm, "allergies": n_allergies, "orders": len(orders),
+        "paid": len(paid), "ready": len(ready), "cancelled": len(cancelled),
+        "venue_reviews": n_venue_reviews, "dish_reviews": n_dish_reviews,
+    })
 
     print()
     export_feeders(api, args.export_dir, args.export_rows)
@@ -627,7 +671,7 @@ def main():
     args = p.parse_args()
 
     if args.export_only or args.prepare_reviews:
-        random.seed(args.seed)
+        RNG.seed(args.seed)
         api = Api(args.base_url)
         check_reachable(api, args.base_url)
         if args.export_only:
