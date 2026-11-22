@@ -38,7 +38,7 @@ public class MenuBrowsingSimulation extends Simulation {
                   exec(VenueRequests.GET_DISH)
                       .pause(MIN_THINK_TIME_BETWEEN_DISHES, MAX_THINK_TIME_BETWEEN_DISHES)));
 
-  {
+  public MenuBrowsingSimulation() {
     setUp(
         BROWSE_MENUS.injectOpen(
             rampUsersPerSec(RAMP_START_USERS_PER_SEC)
