@@ -34,7 +34,7 @@ public class ReviewCreationSimulation extends Simulation {
           .pause(MIN_THINK_TIME_BETWEEN_REVIEWS, MAX_THINK_TIME_BETWEEN_REVIEWS)
           .exec(ReviewRequests.CREATE_VENUE_REVIEW);
 
-  {
+  public ReviewCreationSimulation() {
     requireEnoughReviewRows();
     setUp(
         CREATE_REVIEWS.injectOpen(
