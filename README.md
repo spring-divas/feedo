@@ -305,9 +305,67 @@ kubectl logs deployment/order-service
 
 ---
 
-## 8. Access the services
+## 8. Access the application
 
-The services are only exposed inside the cluster (`ClusterIP`) on port `8080`. Use port forwarding to access them from
+### Through the ingress (single entry point)
+
+The ingress routes `/api/<resource>` paths to the owning service and limits each client to 10 requests per second:
+
+| Path prefix | Service |
+|---|---|
+| `/api/user`, `/api/auth`, `/api/allergy`, `/api/venue-manager` | `user-service` |
+| `/api/venue`, `/api/dish`, `/api/category`, `/api/menu`, `/api/allergen`, `/api/ingredient`, `/api/table` | `venue-service` |
+| `/api/order` | `order-service` |
+| `/api/payment` | `payment-service` |
+| `/api/review` | `review-service` |
+
+Install the ingress-nginx controller.
+
+With `minikube`:
+
+```bash
+minikube addons enable ingress
+```
+
+With Docker Desktop:
+
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.12.1/deploy/static/provider/cloud/deploy.yaml
+```
+
+Wait until the controller is ready:
+
+```bash
+kubectl wait --namespace ingress-nginx \
+  --for=condition=ready pod \
+  --selector=app.kubernetes.io/component=controller \
+  --timeout=120s
+```
+
+By default ingress-nginx answers rate-limited requests with `503`. Make it return `429 Too Many Requests`:
+
+```bash
+kubectl patch configmap ingress-nginx-controller -n ingress-nginx --type merge \
+  -p '{"data":{"limit-req-status-code":"429","limit-conn-status-code":"429"}}'
+```
+
+Forward the controller to the host:
+
+```bash
+kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8080:80
+```
+
+The application is now available at `http://localhost:8080/api`, the `baseUrl` used by the request collections
+(`requests.http` and the Postman collection in the `common` repository). For example, get the public key used to verify
+JWTs:
+
+```bash
+curl http://localhost:8080/api/auth/public-key
+```
+
+### Individual services
+
+The services are only exposed inside the cluster (`ClusterIP`) on port `8080`. To debug a single service, forward it to
 the host, each in a separate terminal:
 
 ```bash
