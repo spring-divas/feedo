@@ -24,7 +24,7 @@ public class ReviewRequests {
 
   public static final HttpRequestActionBuilder CREATE_DISH_REVIEW =
       http("Create dish review")
-          .post("/review/api/review/dish")
+          .post("/api/review/dish")
           .body(StringBody(session -> Json.toJson(new DishReviewRequest(
               session.getLong("userId"), session.getLong("dishId"),
               randomRating(), randomContent()))))
@@ -32,7 +32,7 @@ public class ReviewRequests {
 
   public static final HttpRequestActionBuilder CREATE_VENUE_REVIEW =
       http("Create venue review")
-          .post("/review/api/review/venue")
+          .post("/api/review/venue")
           .body(StringBody(session -> Json.toJson(new VenueReviewRequest(
               session.getLong("userId"), session.getLong("venueId"),
               randomRating(), randomContent()))))

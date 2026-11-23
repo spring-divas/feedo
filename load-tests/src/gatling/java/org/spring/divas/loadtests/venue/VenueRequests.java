@@ -12,19 +12,19 @@ public class VenueRequests {
 
   public static final HttpRequestActionBuilder LIST_VENUES =
       http("List venues")
-          .get("/venue/api/venue")
+          .get("/api/venue")
           .check(status().is(200))
           .check(jsonPath("$[*].id").findRandom().saveAs("venueId"));
 
   public static final HttpRequestActionBuilder GET_MENU =
       http("Get menu")
-          .get("/venue/api/menu")
+          .get("/api/menu")
           .queryParam("venueId", "#{venueId}")
           .check(status().is(200))
           .check(jsonPath("$[*].id").findRandom(3, false).optional().saveAs("dishIds"));
 
   public static final HttpRequestActionBuilder GET_DISH =
       http("Get dish")
-          .get("/venue/api/dish/#{dishId}")
+          .get("/api/dish/#{dishId}")
           .check(status().is(200));
 }

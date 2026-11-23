@@ -23,14 +23,14 @@ public class OrderRequests {
 
   public static final HttpRequestActionBuilder CREATE_ORDER =
       http("Create order")
-          .post("/order/api/order")
+          .post("/api/order")
           .body(StringBody(session -> Json.toJson(createOrderRequest(session))))
           .check(status().is(201))
           .check(jsonPath("$.id").saveAs("orderId"));
 
   public static final HttpRequestActionBuilder GET_ORDER =
       http("Get order")
-          .get("/order/api/order/#{orderId}")
+          .get("/api/order/#{orderId}")
           .check(status().is(200));
 
   private static CreateOrderRequest createOrderRequest(Session session) {
