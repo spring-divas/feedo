@@ -29,10 +29,6 @@ spec:
               app.kubernetes.io/component: controller
 
         - podSelector:
-            matchLabels:
-              app: api-gateway
-
-        - podSelector:
             matchExpressions:
               - key: app
                 operator: In

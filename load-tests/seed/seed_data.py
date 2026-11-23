@@ -49,7 +49,7 @@ TTY = sys.stdout.isatty()
 # Test-data generation only: values are not security-sensitive and must be reproducible with --seed.
 RNG = random.Random()  # NOSONAR
 
-ORDER_API = "/order/api/order"
+ORDER_API = "/api/order"
 USER_PASSWORD = "Password123!"
 
 # ---------------------------------------------------------------------------
@@ -241,8 +241,8 @@ def price():
 
 
 def check_reachable(api, base_url):
-    if not api.get("/venue/api/actuator/health", retries=1):
-        sys.exit(f"Cannot reach {base_url}/venue/api/actuator/health. "
+    if not api.get("/api/auth/public-key", retries=1):
+        sys.exit(f"Cannot reach {base_url}/api/auth/public-key. "
                  f"Is `minikube tunnel` or the ingress port-forward running?")
 
 
@@ -290,10 +290,10 @@ def require(api, result, what):
 def load_venue_catalog(api):
     """Venues that have both tables and dishes, with their table and dish IDs."""
     tables, dishes = {}, {}
-    for t in require(api, api.get("/venue/api/table"), "tables from venue-service"):
+    for t in require(api, api.get("/api/table"), "tables from venue-service"):
         if t.get("id") is not None:
             tables.setdefault(t["venueId"], []).append(t["id"])
-    for d in require(api, api.get("/venue/api/dish"), "dishes from venue-service"):
+    for d in require(api, api.get("/api/dish"), "dishes from venue-service"):
         dishes.setdefault(d["venueId"], []).append(d["id"])
     venues = [v for v in tables if v in dishes]
     if not venues:
@@ -303,7 +303,7 @@ def load_venue_catalog(api):
 
 def create_user(api, run_id, index, role="customer", label=None):
     first, last = RNG.choice(FIRST_NAMES), RNG.choice(LAST_NAMES)
-    r = api.post(f"/user/api/user/{role}", {
+    r = api.post(f"/api/user/{role}", {
         "firstName": first, "lastName": last,
         "email": f"{first.lower()}.{last.lower()}.{label or role}{index}.{run_id}@feedo.test",
         "password": USER_PASSWORD,
@@ -318,7 +318,7 @@ def export_feeders(api, out_dir, rows):
     1-4 of that venue's dishes ("|"-separated).
     """
     print(f"[export] building Gatling feeders from {api.base}")
-    users = require(api, api.get("/user/api/user"), "users from user-service")
+    users = require(api, api.get("/api/user"), "users from user-service")
     customers = [u["id"] for u in users if u.get("role") == "CUSTOMER"]
     if not customers:
         sys.exit("[export] no customers; run the seeder first.")
@@ -397,11 +397,11 @@ def prepare_reviews(api, out_dir, rows, workers, order_workers):
 
 def seed_allergens_and_ingredients(api, run_id, workers):
     print("[venue] allergens & ingredients")
-    res = run_parallel(workers, lambda n: api.post("/venue/api/allergen", {"name": f"{n} {run_id}"}),
+    res = run_parallel(workers, lambda n: api.post("/api/allergen", {"name": f"{n} {run_id}"}),
                        ALLERGENS, "allergens")
     allergen_ids = {name: r["id"] for name, r in zip(ALLERGENS, res) if r}
 
-    res = run_parallel(workers, lambda n: api.post("/venue/api/ingredient", {
+    res = run_parallel(workers, lambda n: api.post("/api/ingredient", {
         "name": f"{n} {run_id}",
         "quantity": RNG.randint(0, 500),
         "allergens": [allergen_ids[a] for a in INGREDIENTS[n] if a in allergen_ids],
@@ -414,7 +414,7 @@ def create_venue(api, i):
     cuisine = RNG.choice(list(CUISINES))
     name = f"{RNG.choice(VENUE_WORDS)} {RNG.choice(VENUE_NOUNS)} #{i} ({cuisine})"
     addr = f"{RNG.randint(1, 200)} {RNG.choice(STREETS)}, {RNG.choice(CITIES)}"
-    r = api.post("/venue/api/venue", {"name": name[:150], "address": addr})
+    r = api.post("/api/venue", {"name": name[:150], "address": addr})
     return {"id": r["id"], "cuisine": cuisine} if r else None
 
 
@@ -451,20 +451,20 @@ def seed_venues(api, args, ingredient_ids):
               if v]
 
     table_jobs = [(v, i) for v in venues for i in range(args.tables_per_venue)]
-    res = run_parallel(w, lambda j: api.post("/venue/api/table", {
+    res = run_parallel(w, lambda j: api.post("/api/table", {
         "venueId": j[0]["id"], "isAvailable": RNG.random() < 0.8,
     }), table_jobs, "tables")
     attach_ids(table_jobs, res, "tables")
 
     cat_jobs = [(v, c) for v in venues for c in CUISINES[v["cuisine"]]["categories"]]
-    res = run_parallel(w, lambda j: api.post("/venue/api/category", {
+    res = run_parallel(w, lambda j: api.post("/api/category", {
         "venueId": j[0]["id"], "name": j[1],
     }), cat_jobs, "categories")
     attach_ids(cat_jobs, res, "categories")
 
     dish_jobs = [(v, name) for v in venues if v.get("categories")
                  for name in dish_names(v["cuisine"], args.dishes_per_venue)]
-    res = run_parallel(w, lambda j: api.post("/venue/api/dish", dish_body(j[0], j[1], ingredient_ids)),
+    res = run_parallel(w, lambda j: api.post("/api/dish", dish_body(j[0], j[1], ingredient_ids)),
                        dish_jobs, "dishes")
     attach_ids(dish_jobs, res, "dishes")
 
@@ -498,10 +498,10 @@ def seed_users(api, run_id, args, venues, allergen_ids):
         w, lambda i: create_user(api, run_id, i, "manager"), range(args.managers), "managers") if u]
 
     vm_jobs = venue_manager_jobs(venues, managers)
-    run_parallel(w, lambda b: api.post("/user/api/venue-manager", b), vm_jobs, "venue managers")
+    run_parallel(w, lambda b: api.post("/api/venue-manager", b), vm_jobs, "venue managers")
 
     allergy_jobs = allergy_jobs_for(customers, allergen_ids)
-    run_parallel(w, lambda j: api.post(f"/user/api/allergy?userId={j[0]}&allergenId={j[1]}"),
+    run_parallel(w, lambda j: api.post(f"/api/allergy?userId={j[0]}&allergenId={j[1]}"),
                  allergy_jobs, "user allergies")
     return customers, managers, len(vm_jobs), len(allergy_jobs)
 
@@ -586,13 +586,13 @@ def seed_reviews(api, args, orders, ready):
     w = args.workers
     venue_pairs = list({(o["user"], o["venue"]) for o in orders})
     venue_pairs = RNG.sample(venue_pairs, k=int(len(venue_pairs) * args.review_ratio))
-    run_parallel(w, lambda p: api.post("/review/api/review/venue",
+    run_parallel(w, lambda p: api.post("/api/review/venue",
                                        review_body("venueId", p[1], p[0])),
                  venue_pairs, "venue reviews")
 
     dish_pairs = list({(o["user"], d) for o in ready for d in o["dishes"]})
     dish_pairs = RNG.sample(dish_pairs, k=int(len(dish_pairs) * args.review_ratio))
-    run_parallel(w, lambda p: api.post("/review/api/review/dish",
+    run_parallel(w, lambda p: api.post("/api/review/dish",
                                        review_body("dishId", p[1], p[0])),
                  dish_pairs, "dish reviews")
     return len(venue_pairs), len(dish_pairs)
